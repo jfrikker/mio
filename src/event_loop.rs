@@ -84,13 +84,13 @@ impl EventLoopBuilder {
 }
 
 /// Single threaded IO event loop.
-pub struct EventLoop<H: Handler> {
+pub struct EventLoop<M = (), T = ()> {
     run: bool,
     poll: Poll,
     events: Events,
-    timer: Timer<H::Timeout>,
-    notify_tx: channel::SyncSender<H::Message>,
-    notify_rx: channel::Receiver<H::Message>,
+    timer: Timer<T>,
+    notify_tx: channel::SyncSender<M>,
+    notify_rx: channel::Receiver<M>,
     config: Config,
 }
 
@@ -98,15 +98,15 @@ pub struct EventLoop<H: Handler> {
 const NOTIFY: Token = Token(usize::MAX - 1);
 const TIMER: Token = Token(usize::MAX - 2);
 
-impl<H: Handler> EventLoop<H> {
+impl<M, T> EventLoop<M, T> {
 
     /// Constructs a new `EventLoop` using the default configuration values.
     /// The `EventLoop` will not be running.
-    pub fn new() -> io::Result<EventLoop<H>> {
+    pub fn new() -> io::Result<EventLoop<M, T>> {
         EventLoop::configured(Config::default())
     }
 
-    fn configured(config: Config) -> io::Result<EventLoop<H>> {
+    fn configured(config: Config) -> io::Result<EventLoop<M, T>> {
         // Create the IO poller
         let poll = try!(Poll::new());
 
@@ -182,7 +182,7 @@ impl<H: Handler> EventLoop<H> {
     ///
     /// The strategy of setting an atomic flag if the event loop is not already
     /// sleeping allows avoiding an expensive wakeup operation if at all possible.
-    pub fn channel(&self) -> Sender<H::Message> {
+    pub fn channel(&self) -> Sender<M> {
         Sender::new(self.notify_tx.clone())
     }
 
@@ -216,7 +216,7 @@ impl<H: Handler> EventLoop<H> {
     /// let timeout = event_loop.timeout(123, Duration::from_millis(300)).unwrap();
     /// let _ = event_loop.run(&mut MyHandler);
     /// ```
-    pub fn timeout(&mut self, token: H::Timeout, delay: Duration) -> timer::Result<Timeout> {
+    pub fn timeout(&mut self, token: T, delay: Duration) -> timer::Result<Timeout> {
         self.timer.set_timeout(delay, token)
     }
 
@@ -254,7 +254,7 @@ impl<H: Handler> EventLoop<H> {
 
     /// Keep spinning the event loop indefinitely, and notify the handler whenever
     /// any of the registered handles are ready.
-    pub fn run(&mut self, handler: &mut H) -> io::Result<()> {
+    pub fn run<H: Handler<M, T>>(&mut self, handler: &mut H) -> io::Result<()> {
         self.run = true;
 
         while self.run {
@@ -280,7 +280,7 @@ impl<H: Handler> EventLoop<H> {
     /// Spin the event loop once, with a given timeout (forever if `None`),
     /// and notify the handler if any of the registered handles become ready
     /// during that time.
-    pub fn run_once(&mut self, handler: &mut H, timeout: Option<Duration>) -> io::Result<()> {
+    pub fn run_once<H: Handler<M, T>>(&mut self, handler: &mut H, timeout: Option<Duration>) -> io::Result<()> {
         trace!("event loop tick");
 
         // Check the registered IO handles for any new events. Each poll
@@ -309,7 +309,7 @@ impl<H: Handler> EventLoop<H> {
     }
 
     // Process IO events that have been previously polled
-    fn io_process(&mut self, handler: &mut H, cnt: usize) {
+    fn io_process<H: Handler<M, T>>(&mut self, handler: &mut H, cnt: usize) {
         let mut i = 0;
 
         trace!("io_process(..); cnt={}; len={}", cnt, self.events.len());
@@ -333,11 +333,11 @@ impl<H: Handler> EventLoop<H> {
         }
     }
 
-    fn io_event(&mut self, handler: &mut H, evt: Event) {
+    fn io_event<H: Handler<M, T>>(&mut self, handler: &mut H, evt: Event) {
         handler.ready(self, evt.token(), evt.kind());
     }
 
-    fn notify(&mut self, handler: &mut H) {
+    fn notify<H: Handler<M, T>>(&mut self, handler: &mut H) {
         for _ in 0..self.config.messages_per_tick {
             match self.notify_rx.try_recv() {
                 Ok(msg) => handler.notify(self, msg),
@@ -349,14 +349,14 @@ impl<H: Handler> EventLoop<H> {
         let _ = self.poll.reregister(&self.notify_rx, NOTIFY, EventSet::readable(), PollOpt::edge() | PollOpt::oneshot());
     }
 
-    fn timer_process(&mut self, handler: &mut H) {
+    fn timer_process<H: Handler<M, T>>(&mut self, handler: &mut H) {
         while let Some(t) = self.timer.poll() {
             handler.timeout(self, t);
         }
     }
 }
 
-impl<H: Handler> fmt::Debug for EventLoop<H> {
+impl<M, T> fmt::Debug for EventLoop<M, T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("EventLoop")
             .field("run", &self.run)
